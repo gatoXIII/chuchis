@@ -49,11 +49,19 @@ export default function ClientDashboard() {
         </Link>
 
         {activeRoutine ? (
-          <Link to={`/client/workout`} className="glass-panel flex-center text-center" style={{ padding: '1.5rem', flexDirection: 'column', gap: '0.5rem', textDecoration: 'none', color: 'white' }}>
+          <div className="glass-panel flex-center text-center" style={{ padding: '1.5rem', flexDirection: 'column', gap: '0.5rem', color: 'white' }}>
              <Dumbbell size={32} color="var(--color-secondary)" />
              <h3>Rutina Activa</h3>
-             <span style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)' }}>{activeRoutine.plan?.dias_totales || '?'} días programados</span>
-          </Link>
+             <span style={{ fontSize: '0.875rem', color: 'var(--color-text-muted)', marginBottom: '8px' }}>{activeRoutine.plan?.dias_totales || '?'} días programados</span>
+             <div style={{ display: 'flex', gap: '10px', width: '100%', justifyContent: 'center' }}>
+                <Link to={`/client/workout`} className="btn-primary" style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '0.8rem', textDecoration: 'none' }}>
+                  Ir a Entrenar
+                </Link>
+                <Link to={`/client/routine/${activeRoutine._id}`} className="btn-secondary" style={{ padding: '8px 16px', borderRadius: '8px', fontSize: '0.8rem', textDecoration: 'none' }}>
+                  Ver Detalles Completos
+                </Link>
+             </div>
+          </div>
         ) : (
           <div className="glass-panel flex-center text-center" style={{ padding: '1.5rem', flexDirection: 'column', gap: '0.5rem', opacity: 0.5 }}>
              <Dumbbell size={32} />
