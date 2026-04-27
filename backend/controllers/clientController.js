@@ -40,20 +40,24 @@ exports.getClients = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// POST /api/clients
-// Crear cliente + ClientProfile base
-// ─────────────────────────────────────────────
 exports.createClient = async (req, res) => {
   try {
     const {
       nombre, email, password, edad, altura_cm,
-      // Perfil fitness optional al crear
+      // Perfil fitness extendido
       objetivo = 'hipertrofia',
       experiencia = 'principiante',
       dias_disponibles = 4,
       equipamiento = 'gym',
       limitaciones = [],
       restricciones_alimentarias = [],
+      // Nuevos campos
+      peso_inicial, telefono, ocupacion, meta_especifica, tiempo_objetivo,
+      tiempo_sesion, horario_preferido, lesiones_pasadas, dolor_frecuente,
+      condicion_medica, estilo_vida, horas_sueno, nivel_estres, comidas_dia,
+      alcohol, tipo_entrenamiento_preferido, ejercicios_disgusto,
+      motivacion_principal, nivel_compromiso, porcentaje_grasa_inicial,
+      medida_cintura, medida_cadera, observaciones_posturales, notas_entrenador
     } = req.body;
 
     if (!nombre || !email || !password || !edad || !altura_cm) {
@@ -86,12 +90,13 @@ exports.createClient = async (req, res) => {
     // Crear perfil fitness inmediatamente
     const profile = new ClientProfile({
       client_id: client._id.toString(),
-      objetivo,
-      experiencia,
-      dias_disponibles,
-      equipamiento,
-      limitaciones,
-      restricciones_alimentarias,
+      objetivo, experiencia, dias_disponibles, equipamiento, limitaciones, restricciones_alimentarias,
+      peso_inicial, telefono, ocupacion, meta_especifica, tiempo_objetivo,
+      tiempo_sesion, horario_preferido, lesiones_pasadas, dolor_frecuente,
+      condicion_medica, estilo_vida, horas_sueno, nivel_estres, comidas_dia,
+      alcohol, tipo_entrenamiento_preferido, ejercicios_disgusto,
+      motivacion_principal, nivel_compromiso, porcentaje_grasa_inicial,
+      medida_cintura, medida_cadera, observaciones_posturales, notas_entrenador
     });
 
     await profile.save();
@@ -189,9 +194,6 @@ exports.deleteClient = async (req, res) => {
 };
 
 // ─────────────────────────────────────────────
-// PUT /api/clients/:id/profile
-// Editar perfil fitness (objetivo, experiencia, etc.)
-// ─────────────────────────────────────────────
 exports.updateClientProfile = async (req, res) => {
   try {
     const client = await Client.findById(req.params.id);
@@ -201,19 +203,26 @@ exports.updateClientProfile = async (req, res) => {
       return res.status(403).json({ error: 'Acceso denegado' });
     }
 
-    const { objetivo, experiencia, dias_disponibles, equipamiento, limitaciones, restricciones_alimentarias } = req.body;
+    const profileFields = [
+      'objetivo', 'experiencia', 'dias_disponibles', 'equipamiento', 'limitaciones', 'restricciones_alimentarias',
+      'peso_inicial', 'telefono', 'ocupacion', 'meta_especifica', 'tiempo_objetivo',
+      'tiempo_sesion', 'horario_preferido', 'lesiones_pasadas', 'dolor_frecuente',
+      'condicion_medica', 'estilo_vida', 'horas_sueno', 'nivel_estres', 'comidas_dia',
+      'alcohol', 'tipo_entrenamiento_preferido', 'ejercicios_disgusto',
+      'motivacion_principal', 'nivel_compromiso', 'porcentaje_grasa_inicial',
+      'medida_cintura', 'medida_cadera', 'observaciones_posturales', 'notas_entrenador'
+    ];
 
     let profile = await ClientProfile.findOne({ client_id: req.params.id });
     if (!profile) {
       profile = new ClientProfile({ client_id: req.params.id });
     }
 
-    if (objetivo) profile.objetivo = objetivo;
-    if (experiencia) profile.experiencia = experiencia;
-    if (dias_disponibles) profile.dias_disponibles = dias_disponibles;
-    if (equipamiento) profile.equipamiento = equipamiento;
-    if (limitaciones) profile.limitaciones = limitaciones;
-    if (restricciones_alimentarias) profile.restricciones_alimentarias = restricciones_alimentarias;
+    profileFields.forEach(field => {
+      if (req.body[field] !== undefined) {
+        profile[field] = req.body[field];
+      }
+    });
 
     await profile.save();
 

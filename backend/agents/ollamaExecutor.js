@@ -13,9 +13,18 @@
 // ── Configuración (Dinámica para permitir cambios en runtime) ─────────────────
 const getUrl = () => (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').trim();
 const getMaxConcurrency = () => parseInt(process.env.OLLAMA_MAX_CONCURRENCY || '1', 10);
-const getMaxRetries = () => parseInt(process.env.OLLAMA_MAX_RETRIES || '2', 10);
+const getMaxRetries = () => parseInt(process.env.OLLAMA_MAX_RETRIES || '4', 10);
 const getCbThreshold = () => parseInt(process.env.OLLAMA_CB_THRESHOLD || '5', 10);
 const getCbRecoveryMs = () => parseInt(process.env.OLLAMA_CB_RECOVERY_MS || '30000', 10);
+
+const verifyConnection = async () => {
+    try {
+        const res = await fetch(getUrl());
+        return res.ok;
+    } catch (e) {
+        return false;
+    }
+};
 
 /**
  * Mapa de modelos por tipo de tarea.
@@ -27,11 +36,28 @@ const getModelMap = () => ({
 
 const TASK_MODEL_ROUTING = {
     workout: 'deep',   // Planificación kinesiológica → necesita razonamiento
+    workout_structure: 'deep',   // Estructura del split → razonamiento
+    workout_day: 'deep',   // Ejercicios por día → razonamiento
     nutrition: 'deep',   // Cálculos + adaptación cultural → necesita razonamiento
     engagement: 'fast',   // Texto corto emocional → velocidad > profundidad
     social: 'fast',   // Copy creativo → velocidad > profundidad
     debate: 'fast',   // Respuesta conversacional → velocidad
     evaluation: 'fast',   // Evaluación de borrador → rápido
+};
+
+/**
+ * Límite de tokens de generación por tipo de tarea.
+ * Evita OOM en modelos locales con prompts complejos.
+ */
+const NUM_PREDICT_MAP = {
+    workout: 1536,     // Rutina completa (legacy, por si se usa directo)
+    workout_structure: 256,  // Solo estructura: split, días, músculos
+    workout_day: 512,        // Ejercicios para un solo día
+    nutrition: 1536,   // Plan nutricional similar
+    engagement: 512,   // Mensaje corto
+    social: 512,       // Post corto
+    debate: 768,       // Respuesta conversacional
+    evaluation: 512,   // Evaluación breve
 };
 
 // ── Estado interno ───────────────────────────────────────────────────────────
@@ -82,6 +108,7 @@ const callOllama = async (task) => {
     const modelMap = getModelMap();
     const model = modelMap[modelTier] || modelMap.deep;
     const url = `${getUrl()}/api/chat`;
+    const numPredict = NUM_PREDICT_MAP[task.taskType] || 1024;
 
     const controller = new AbortController();
     const timerId = setTimeout(() => controller.abort(), timeoutMs);
@@ -89,7 +116,7 @@ const callOllama = async (task) => {
     const body = {
         model,
         stream: false,
-        options: { temperature: 0.1, top_p: 0.5, num_predict: 3072 },
+        options: { temperature: 0.1, top_p: 0.5, num_predict: numPredict, num_ctx: 2048 },
         messages: [
             ...(systemPrompt ? [{ role: 'system', content: systemPrompt }] : []),
             { role: 'user', content: userPrompt },
@@ -100,7 +127,7 @@ const callOllama = async (task) => {
         body.format = 'json';
     }
 
-    console.log(`[OllamaExecutor] → ${task.taskType} | modelo: ${model} | timeout: ${timeoutMs}ms`);
+    console.log(`[OllamaExecutor] → ${task.taskType} | modelo: ${model} | tokens: ${numPredict} | timeout: ${timeoutMs}ms`);
 
     try {
         const res = await fetch(url, {
@@ -136,19 +163,32 @@ const callOllama = async (task) => {
 // ── Reintentos con backoff exponencial ───────────────────────────────────────
 const executeWithRetry = async (task, attempt = 1) => {
     try {
+        console.log(`[OllamaExecutor] ⏳ [Intento ${attempt}/${getMaxRetries()}] Iniciando tarea: ${task.taskType}`);
         const result = await callOllama(task);
         recordSuccess();
+        console.log(`[OllamaExecutor] ✅ Tarea ${task.taskType} completada con éxito`);
         return result;
     } catch (err) {
         const maxRetries = getMaxRetries();
-        if (attempt > maxRetries) {
+        console.warn(`[OllamaExecutor] ⚠️ Error en tarea ${task.taskType} (Intento ${attempt}/${maxRetries}): ${err.message}`);
+
+        if (attempt >= maxRetries) {
             recordFailure();
-            console.error(`[OllamaExecutor] ✗ ${task.taskType} falló tras ${maxRetries} intentos: ${err.message}`);
+            console.error(`[OllamaExecutor] ❌ ${task.taskType} falló tras ${maxRetries} intentos. Abortando.`);
             throw err;
         }
 
-        const backoff = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s…
-        console.warn(`[OllamaExecutor] ↩ ${task.taskType} reintento ${attempt}/${maxRetries} en ${backoff}ms`);
+        console.log(`[OllamaExecutor] 🔄 Verificando estado de conexión con el motor IA...`);
+        const isConnected = await verifyConnection();
+        
+        if (!isConnected) {
+            console.error(`[OllamaExecutor] 🔌 Sin conexión con Ollama. Esperando para reestablecer...`);
+        } else {
+            console.log(`[OllamaExecutor] ⚡ Conexión confirmada (Ollama responde). El modelo falló, reintentando...`);
+        }
+
+        const backoff = Math.pow(2, attempt) * 2000; // 4s, 8s, 16s…
+        console.log(`[OllamaExecutor] ⏳ Reintentando petición en ${backoff/1000}s...`);
         await sleep(backoff);
         return executeWithRetry(task, attempt + 1);
     }

@@ -1,17 +1,27 @@
 const CheckIn = require('../models/CheckIn');
 const ClientProfile = require('../models/ClientProfile');
 
+const Client = require('../models/Client');
+
 /**
  * Calcula el estado derivado del cliente basado en su perfil y su historial inmutable de check-ins.
  * @param {String} clientId 
  * @returns {Object} Estado completo derivado
  */
 exports.getClientState = async (clientId) => {
-  const profile = await ClientProfile.findOne({ client_id: clientId });
+  const baseClient = await Client.findById(clientId);
+  let profile = await ClientProfile.findOne({ client_id: clientId });
   const checkins = await CheckIn.find({ client_id: clientId }).sort({ week: 1 });
 
-  // Si no hay perfil, retorna base nula
-  if (!profile) return null;
+  // Si no hay cliente base, abortamos
+  if (!baseClient) return null;
+
+  // Fusionamos datos base de User/Client en el profile para facilitar su consumo por la IA
+  let mergedProfile = profile ? profile.toObject() : {};
+  mergedProfile.edad = baseClient.edad;
+  mergedProfile.altura_cm = baseClient.altura_cm;
+  mergedProfile.nombre = baseClient.nombre;
+  mergedProfile.email = baseClient.email;
 
   const currentWeek = checkins.length > 0 ? checkins[checkins.length - 1].week + 1 : 1;
   const lastCheckIn = checkins.length > 0 ? checkins[checkins.length - 1] : null;
@@ -37,7 +47,7 @@ exports.getClientState = async (clientId) => {
 
   return {
     client_id: clientId,
-    profile_info: profile,
+    profile_info: mergedProfile,
     current_state: {
       week: currentWeek,
       peso: lastCheckIn ? lastCheckIn.peso : null,

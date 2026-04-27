@@ -1,60 +1,59 @@
+/**
+ * agentsController.js (actualizado)
+ * Agrega endpoint para generación de plan de suplementación.
+ */
+
 const { generateWorkoutPlan } = require('../agents/workoutAgent');
 const { generateMealPlan } = require('../agents/nutritionAgent');
 const { generateEngagementMessage } = require('../agents/engagementAgent');
 const { generateSocialPost } = require('../agents/socialAgent');
+const { generateSupplementPlan } = require('../agents/supplementAgent');
 
-/**
- * POST /api/agents/workout
- * Genera un plan de entrenamiento usando el workoutAgent (Ollama).
- */
 exports.generateWorkout = async (req, res) => {
   try {
-    const clientState = req.body;
-    const plan = await generateWorkoutPlan(clientState);
+    const plan = await generateWorkoutPlan(req.body);
     res.json({ success: true, plan });
-  } catch (error) {
-    res.status(500).json({ error: 'Error generando rutina: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Error generando rutina: ' + err.message });
   }
 };
 
-/**
- * POST /api/agents/nutrition
- * Genera un plan de alimentación usando el nutritionAgent (Ollama).
- */
 exports.generateNutrition = async (req, res) => {
   try {
-    const nutritionProfile = req.body;
-    const mealPlan = await generateMealPlan(nutritionProfile);
-    res.json({ success: true, meal_plan: mealPlan });
-  } catch (error) {
-    res.status(500).json({ error: 'Error generando plan nutricional: ' + error.message });
+    const meal_plan = await generateMealPlan(req.body);
+    res.json({ success: true, meal_plan });
+  } catch (err) {
+    res.status(500).json({ error: 'Error generando plan nutricional: ' + err.message });
   }
 };
 
-/**
- * POST /api/agents/engagement
- * Genera un mensaje de engagement personalizado para retención de cliente.
- */
 exports.generateEngagement = async (req, res) => {
   try {
-    const context = req.body;
-    const message = await generateEngagementMessage(context);
+    const message = await generateEngagementMessage(req.body);
     res.json({ success: true, message });
-  } catch (error) {
-    res.status(500).json({ error: 'Error generando mensaje de engagement: ' + error.message });
+  } catch (err) {
+    res.status(500).json({ error: 'Error generando mensaje de engagement: ' + err.message });
+  }
+};
+
+exports.generateSocial = async (req, res) => {
+  try {
+    const post = await generateSocialPost(req.body);
+    res.json({ success: true, post });
+  } catch (err) {
+    res.status(500).json({ error: 'Error generando post social: ' + err.message });
   }
 };
 
 /**
- * POST /api/agents/social
- * Genera un post para redes sociales sobre un milestone del cliente.
+ * POST /api/agents/supplement
+ * Genera un protocolo de suplementación personalizado.
  */
-exports.generateSocial = async (req, res) => {
+exports.generateSupplement = async (req, res) => {
   try {
-    const milestoneData = req.body;
-    const post = await generateSocialPost(milestoneData);
-    res.json({ success: true, post });
-  } catch (error) {
-    res.status(500).json({ error: 'Error generando post social: ' + error.message });
+    const supplement_plan = await generateSupplementPlan(req.body);
+    res.json({ success: true, supplement_plan });
+  } catch (err) {
+    res.status(500).json({ error: 'Error generando plan de suplementación: ' + err.message });
   }
 };

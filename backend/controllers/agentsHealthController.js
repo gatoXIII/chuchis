@@ -5,7 +5,7 @@
  * Requiere rol trainer o superior.
  */
 
-const { getStatus: getExecutorStatus } = require('../agents/ollamaExecutor');
+const { getStatus: getExecutorStatus } = require('../agents/anthropicExecutor');
 const { getAllTasksSummary, TASK_CONFIGS } = require('../agents/agentOrchestrator');
 
 exports.getAgentsHealth = async (req, res) => {
@@ -13,36 +13,20 @@ exports.getAgentsHealth = async (req, res) => {
         const executor = getExecutorStatus();
         const tasks = getAllTasksSummary();
 
-        // Verificar conectividad con Ollama
-        let ollamaReachable = false;
-        let ollamaModels = [];
-
-        try {
-            const ollamaUrl = (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').trim();
-            const ctrl = new AbortController();
-            const timer = setTimeout(() => ctrl.abort(), 5000);
-
-            const tagsRes = await fetch(`${ollamaUrl}/api/tags`, { signal: ctrl.signal });
-            clearTimeout(timer);
-
-            if (tagsRes.ok) {
-                const data = await tagsRes.json();
-                ollamaReachable = true;
-                ollamaModels = (data.models || []).map(m => m.name);
-            }
-        } catch (_) {
-            ollamaReachable = false;
+        // Verificar conectividad con Anthropic
+        let anthropicReachable = false;
+        if (process.env.ANTHROPIC_API_KEY) {
+            anthropicReachable = true; // Si hay key asumimos disponible por ahora
         }
 
         res.json({
-            status: ollamaReachable ? 'ok' : 'degraded',
+            status: anthropicReachable ? 'ok' : 'degraded',
             timestamp: new Date().toISOString(),
-            ollama: {
-                reachable: ollamaReachable,
-                url: (process.env.OLLAMA_BASE_URL || 'http://127.0.0.1:11434').trim(),
-                models_installed: ollamaModels,
-                model_deep: executor.models.deep,
-                model_fast: executor.models.fast,
+            provider: 'anthropic',
+            anthropic: {
+                reachable: anthropicReachable,
+                model_sonnet: executor.models.sonnet,
+                model_haiku: executor.models.haiku,
             },
             executor: {
                 running: executor.running,

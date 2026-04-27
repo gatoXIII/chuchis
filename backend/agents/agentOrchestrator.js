@@ -3,63 +3,66 @@
  * Gestor del ciclo de vida de tareas de agentes.
  *
  * Ciclo de vida:
- *   PENDING  → tarea encolada, esperando slot en OllamaExecutor
- *   RUNNING  → OllamaExecutor está procesando
- *   COMPLETED→ resultado disponible
- *   FAILED   → error irrecuperable (tras reintentos)
- *   TIMEOUT  → tarea cancelada por tiempo de espera total (cola + ejecución)
+ *   PENDING → RUNNING → COMPLETED | FAILED | TIMEOUT
  *
- * Cada agente (workoutAgent, nutritionAgent, etc.) NO llama a Ollama directamente.
- * Construye un payload estructurado y llama a `submitTask()`.
- *
- * El orquestador devuelve el resultado parseado o ejecuta el fallback inteligente.
+ * Nuevo: soporte para SSE (Server-Sent Events) via EventEmitter
+ * para enviar progreso en tiempo real al frontend.
  */
 
-const { enqueue } = require('./ollamaExecutor');
+const { enqueue } = require('./anthropicExecutor');
+const { EventEmitter } = require('events');
 
-// ── Tipos de tarea con sus timeouts individuales ─────────────────────────────
+// EventEmitter global para broadcast de progreso
+const progressEmitter = new EventEmitter();
+progressEmitter.setMaxListeners(50);
+
+// ── Tipos de tarea con timeouts ───────────────────────────────────────────────
 const TASK_CONFIGS = {
-    workout: { timeoutMs: 3 * 60 * 1000, label: 'Plan de entrenamiento' },
-    nutrition: { timeoutMs: 3 * 60 * 1000, label: 'Plan nutricional' },
+    workout: { timeoutMs: 6 * 60 * 1000, label: 'Plan de entrenamiento' },
+    workout_structure: { timeoutMs: 2 * 60 * 1000, label: 'Estructura de rutina' },
+    workout_day: { timeoutMs: 3 * 60 * 1000, label: 'Día de rutina' },
+    nutrition: { timeoutMs: 6 * 60 * 1000, label: 'Plan nutricional' },
+    supplement: { timeoutMs: 60 * 1000, label: 'Plan de suplementación' },
     engagement: { timeoutMs: 60 * 1000, label: 'Mensaje de engagement' },
-    social: { timeoutMs: 90 * 1000, label: 'Post para redes sociales' },
+    social: { timeoutMs: 90 * 1000, label: 'Post para redes' },
     debate: { timeoutMs: 90 * 1000, label: 'Debate de rutina' },
     evaluation: { timeoutMs: 60 * 1000, label: 'Evaluación de borrador' },
 };
 
-// ── Registro de tareas activas ───────────────────────────────────────────────
-// Map<taskId, TaskRecord>
+// ── Registro de tareas activas ────────────────────────────────────────────────
 const _taskRegistry = new Map();
-
-// Limpieza automática de tareas completadas después de TTL
-const TASK_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const TASK_TTL_MS = 10 * 60 * 1000; // 10 min
 
 const cleanupTask = (taskId) => {
     setTimeout(() => _taskRegistry.delete(taskId), TASK_TTL_MS);
 };
 
-// ── Generador de ID determinístico sin dependencia externa ───────────────────
 let _seq = 0;
 const generateTaskId = () => `task_${Date.now()}_${(++_seq).toString().padStart(4, '0')}`;
 
-// ── Payload de tarea: lo que cada agente entrega al orquestador ───────────────
-/**
- * @typedef {Object} AgentPayload
- * @property {string} taskType        - Tipo de tarea (ver TASK_CONFIGS)
- * @property {string} systemPrompt    - Rol e instrucciones del agente
- * @property {string} userPrompt      - Prompt con datos concretos del cliente
- * @property {string} expectedFormat  - 'json' | 'text'
- * @property {Function} fallbackFn    - Función de fallback sin argumentos, retorna resultado válido
- * @property {Function} [parseResult] - Parser del string raw → objeto. Default: JSON.parse
- */
+// ── Emitir evento de progreso ─────────────────────────────────────────────────
+const emitProgress = (jobId, data) => {
+    if (!jobId) return;
+    progressEmitter.emit(`progress:${jobId}`, data);
+};
 
+// ── submitTask ────────────────────────────────────────────────────────────────
 /**
- * Submits una tarea al orquestador.
- * @param {AgentPayload} payload
- * @returns {Promise<Object>} Resultado parseado o resultado de fallbackFn
+ * @param {Object} payload
+ * @param {string} payload.taskType
+ * @param {string} payload.systemPrompt
+ * @param {string} payload.userPrompt
+ * @param {string} payload.expectedFormat  'json' | 'text'
+ * @param {Function} payload.fallbackFn
+ * @param {Function} [payload.parseResult]
+ * @param {string} [payload.jobId]         ID del job padre (para SSE progress)
+ * @param {string} [payload.progressLabel] Etiqueta para el evento de progreso
  */
 const submitTask = async (payload) => {
-    const { taskType, systemPrompt, userPrompt, expectedFormat, fallbackFn, parseResult } = payload;
+    const {
+        taskType, systemPrompt, userPrompt, expectedFormat,
+        fallbackFn, parseResult, jobId, progressLabel,
+    } = payload;
 
     const config = TASK_CONFIGS[taskType];
     if (!config) throw new Error(`[Orchestrator] Tipo de tarea desconocido: "${taskType}"`);
@@ -67,19 +70,8 @@ const submitTask = async (payload) => {
     const taskId = generateTaskId();
     const startedAt = Date.now();
 
-    // Registrar tarea
-    const record = {
-        taskId,
-        taskType,
-        status: 'PENDING',
-        startedAt,
-        updatedAt: startedAt,
-        result: null,
-        error: null,
-    };
+    const record = { taskId, taskType, status: 'PENDING', startedAt, updatedAt: startedAt, result: null, error: null };
     _taskRegistry.set(taskId, record);
-
-    console.log(`[Orchestrator] ⏳ [${taskId}] ${config.label} → PENDING`);
 
     const transition = (status, data = {}) => {
         Object.assign(record, { status, updatedAt: Date.now(), ...data });
@@ -90,14 +82,10 @@ const submitTask = async (payload) => {
         transition('RUNNING');
 
         const rawContent = await enqueue({
-            taskType,
-            systemPrompt,
-            userPrompt,
-            expectedFormat,
+            taskType, systemPrompt, userPrompt, expectedFormat,
             timeoutMs: config.timeoutMs,
         });
 
-        // Parseo del resultado
         let parsed;
         if (parseResult) {
             parsed = parseResult(rawContent);
@@ -109,14 +97,22 @@ const submitTask = async (payload) => {
 
         transition('COMPLETED', { result: parsed });
         cleanupTask(taskId);
+
+        // Emitir progreso si hay jobId
+        if (jobId && progressLabel) {
+            emitProgress(jobId, { step: progressLabel, status: 'completed', taskId });
+        }
+
         return parsed;
 
     } catch (err) {
         const isTimeout = err.message?.includes('TIMEOUT') || err.message?.includes('Circuit OPEN');
-        const finalStatus = isTimeout ? 'TIMEOUT' : 'FAILED';
-
-        transition(finalStatus, { error: err.message });
+        transition(isTimeout ? 'TIMEOUT' : 'FAILED', { error: err.message });
         cleanupTask(taskId);
+
+        if (jobId && progressLabel) {
+            emitProgress(jobId, { step: progressLabel, status: 'failed', error: err.message, taskId });
+        }
 
         console.warn(`[Orchestrator] 🔁 [${taskId}] Ejecutando fallback para ${config.label}`);
 
@@ -124,42 +120,28 @@ const submitTask = async (payload) => {
             throw new Error(`[Orchestrator] Sin fallback para ${taskType}: ${err.message}`);
         }
 
-        const fallbackResult = fallbackFn();
-        console.log(`[Orchestrator] 🟡 [${taskId}] Fallback aplicado correctamente`);
-        return fallbackResult;
+        return fallbackFn();
     }
 };
 
 // ── JSON extractor robusto ────────────────────────────────────────────────────
 const extractAndParseJSON = (raw, taskId) => {
-    // Intento 1: JSON puro
     try { return JSON.parse(raw); } catch (_) { }
 
-    // Intento 2: extraer primer bloque {...}
     const match = raw.match(/\{[\s\S]*\}/);
     if (match) {
         try { return JSON.parse(match[0]); } catch (_) { }
     }
 
-    // Intento 3: limpiar bloques de markdown ```json ... ```
     const cleaned = raw.replace(/```json|```/g, '').trim();
     try { return JSON.parse(cleaned); } catch (_) { }
 
-    throw new Error(`[Orchestrator] No se pudo extraer JSON válido de la respuesta (taskId: ${taskId})`);
+    throw new Error(`[Orchestrator] No se pudo extraer JSON válido (taskId: ${taskId}). Raw: ${raw.substring(0, 100)}...`);
 };
 
-// ── Helpers de presentación ───────────────────────────────────────────────────
-const statusEmoji = (s) => ({
-    PENDING: '⏳',
-    RUNNING: '🔄',
-    COMPLETED: '✅',
-    FAILED: '❌',
-    TIMEOUT: '⏱️',
-}[s] || '•');
+const statusEmoji = (s) => ({ PENDING: '⏳', RUNNING: '🔄', COMPLETED: '✅', FAILED: '❌', TIMEOUT: '⏱️' }[s] || '•');
 
-// ── Consultas de estado (para admin / health check) ───────────────────────────
 const getTaskStatus = (taskId) => _taskRegistry.get(taskId) || null;
-
 const getAllTasksSummary = () => {
     const tasks = [..._taskRegistry.values()];
     return {
@@ -177,4 +159,5 @@ module.exports = {
     getTaskStatus,
     getAllTasksSummary,
     TASK_CONFIGS,
+    progressEmitter,
 };
